@@ -21,7 +21,7 @@ You can configure Roles such as `Admin`, `Manager`, `User`, and `Guest`, with ea
 * **Role Selector** — Select the Role you want to configure.
 * **+ Add New Role** — Create a new Role.
 * **Color** — Assign a color to identify the Role's results.
-* **Container** — Associate the Role with a Firefox Container.
+* **Container** — Associate the Role with a [Firefox Container](https://addons.mozilla.org/en-US/firefox/addon/pr0f0x01_containerdock/).
 * **Header / Parameter Table** — Manage the Role's Headers and Parameters.
 * **🎯 Grab Value From Traffic** — Capture a Header or Parameter value directly from traffic and create a reusable fingerprint.
 * **Update From Container** — Refresh the Role's values from traffic captured for its Container.
@@ -54,6 +54,8 @@ You can configure Roles such as `Admin`, `Manager`, `User`, and `Guest`, with ea
 
 * **Send ALL Roles only** — Execute the selected request using all configured Roles.
 * **Send ALL Roles With Method** — Generate request variants using methods such as `GET`, `POST`, `PUT`, `PATCH`, and `DELETE`.
+* **Apply Role Configuration** — Select a configured Role and apply its predefined Headers and Parameters directly to the current Repeater request, allowing the request to be sent using that Role's identity without running it through all Roles.
+
 
 ### Firefox Companion — [ContainerDock](https://addons.mozilla.org/en-US/firefox/addon/pr0f0x01_containerdock/)
 
@@ -65,7 +67,16 @@ RoleSwitch turns authorization, RBAC, and multi-account testing into a simple wo
 
 ---
 
+# Detailed Documentation
+
+This section provides a **complete and detailed explanation of RoleSwitch**, covering all major features, tabs, buttons, controls, workflows, and integrations available in the extension.
+
+Unlike the quick reference above, this section explains **how each feature works, what it does, and how it is used**, including Role configuration, Headers and Parameters, automatic value extraction, Container integration, multi-Role execution, Repeater integration, Results, History, and the Firefox companion extension.
+
+---
+
 # Main Features
+
 
 ## 1. Role Configuration
 
