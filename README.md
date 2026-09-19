@@ -857,26 +857,4 @@ Always use it only against systems and accounts you are authorized to test.
 
 ---
 
-# Project Structure
 
-A typical setup can look like:
-
-```text
-RoleSwitch/
-│
-├── RoleSwitch.py
-│
-├── README.md
-│
-└── Firefox Companion/
-    └── ContainerDock
-```
-
-The Burp extension and Firefox companion have separate responsibilities:
-
-| Component | Responsibility |
-|---|---|
-| **RoleSwitch** | Role/session configuration, request execution, value extraction, container traffic capture, results and history |
-| **Firefox Companion** | Container management, multi-container launch, container grouping, Container identification/header injection |
-
----
