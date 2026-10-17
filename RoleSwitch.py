@@ -14,8 +14,9 @@ from javax.swing.border import EmptyBorder, LineBorder
 from javax.swing.event import DocumentListener
 from java.awt import (
     BorderLayout, Dimension, Color, Font, GridBagLayout,
-    GridBagConstraints, Insets, FlowLayout, Component
+    GridBagConstraints, Insets, FlowLayout, Component, Toolkit
 )
+from java.awt.datatransfer import StringSelection
 from java.awt.event import MouseAdapter, MouseEvent, ActionListener
 from java.lang import String, Thread, Runnable
 from java.util import TimeZone, Date
@@ -44,8 +45,10 @@ DEFAULT_COLORS = [
 
 REPLACE_TYPES = ["Header", "Parameter"]
 
-ALL_RESULT_COLUMNS     = ["ID", "Role", "Status", "Size", "Time", "Host", "Method", "URL", "Params", "Match"]
+ALL_RESULT_COLUMNS      = ["ID", "Role", "Status", "Size", "Time", "Host", "Method", "URL", "Params", "Match"]
 DEFAULT_VISIBLE_COLUMNS = ["ID", "Role", "Status", "Size"]
+
+SORT_MAPPING = [None, ("id", "asc"), ("id", "desc"), ("size", "asc"), ("size", "desc"), ("match", "desc")]
 
 
 def hex_to_color(h):
@@ -117,6 +120,7 @@ class BgThread(Thread):
         except Exception as e:
             print("[BgThread Error] " + str(e))
 
+
 class JobQueueWorker(Thread):
     def __init__(self, queue):
         self._queue = queue
@@ -136,6 +140,7 @@ class JobQueueWorker(Thread):
     def stop(self):
         self._stop = True
         self._queue.put(None)
+
 
 class HistoryMsgWrapper(IHttpRequestResponse):
     def __init__(self, request, service):
@@ -225,15 +230,15 @@ class BatchPanel(JPanel):
     def __init__(self, batch_id, colors_map_fn, font_size, on_select_result, on_delete_ids, ext):
         JPanel.__init__(self, BorderLayout())
         self.setBackground(Color(28, 28, 28))
-        self.batch_id         = batch_id
-        self._colors_map_fn   = colors_map_fn
-        self._font_size       = font_size
-        self.results          = []
+        self.batch_id          = batch_id
+        self._colors_map_fn    = colors_map_fn
+        self._font_size        = font_size
+        self.results           = []
         self._on_select_result = on_select_result
         self._on_delete_ids    = on_delete_ids
-        self.ext              = ext
-        self._next_local_id   = 1
-        self._all_columns     = {}
+        self.ext               = ext
+        self._next_local_id    = 1
+        self._all_columns      = {}
         self._build()
 
     def _build(self):
@@ -255,11 +260,14 @@ class BatchPanel(JPanel):
         renderer = ColoredRowRenderer(self._colors_map_fn, sz)
         width_map = {"ID": 45, "Role": 200, "Status": 60, "Size": 70, "Time": 150,
                      "Host": 150, "Method": 70, "URL": 260, "Params": 220, "Match": 55}
+        saved_widths = self.ext.get_column_widths() if (self.ext and hasattr(self.ext, "get_column_widths")) else {}
         for name in ALL_RESULT_COLUMNS:
             col_idx = self.resModel.findColumn(name)
             tc = self.resTable.getColumnModel().getColumn(col_idx)
             tc.setCellRenderer(renderer)
-            tc.setPreferredWidth(width_map.get(name, 120))
+            w = int(saved_widths.get(name, width_map.get(name, 120)))
+            tc.setPreferredWidth(w)
+            tc.setWidth(w)
             self._all_columns[name] = tc
 
         header = self.resTable.getTableHeader()
@@ -280,9 +288,16 @@ class BatchPanel(JPanel):
         cm = self.resTable.getColumnModel()
         while cm.getColumnCount() > 0:
             cm.removeColumn(cm.getColumn(0))
+        saved_widths = self.ext.get_column_widths() if (self.ext and hasattr(self.ext, "get_column_widths")) else {}
         for name in ALL_RESULT_COLUMNS:
             if name in visible_names and name in self._all_columns:
-                cm.addColumn(self._all_columns[name])
+                tc = self._all_columns[name]
+                if name in saved_widths:
+                    w = int(saved_widths[name])
+                    tc.setPreferredWidth(w)
+                    tc.setWidth(w)
+                cm.addColumn(tc)
+        self.resTable.doLayout()
 
     def _row_values(self, r):
         match_mark = u""
@@ -301,7 +316,10 @@ class BatchPanel(JPanel):
             result["local_id"] = self._next_local_id
             self._next_local_id += 1
         self.results.append(result)
-        self.resModel.insertRow(0, self._row_values(result))
+        if self.ext and self.ext.get_sort_mode():
+            self.refresh_table()
+        else:
+            self.resModel.insertRow(0, self._row_values(result))
 
     def _sorted_results(self):
         mode = self.ext.get_sort_mode() if self.ext else None
@@ -312,7 +330,6 @@ class BatchPanel(JPanel):
         if key == "size":
             keyfn = lambda r: r.get("size", 0)
         elif key == "match":
-            
             keyfn = lambda r: 1 if (self.ext and self.ext.get_search_text() and self.ext.result_matches_search(r, self.ext.get_search_text())) else 0
         else:
             keyfn = lambda r: r.get("local_id", r.get("id", 0))
@@ -399,6 +416,7 @@ class BatchPanel(JPanel):
         if self._on_delete_ids:
             self._on_delete_ids(global_ids_to_del)
 
+
 class KeyCellRenderer(TableCellRenderer):
     def __init__(self, ext, container_fn, base_font_size):
         self._ext = ext
@@ -453,7 +471,6 @@ class RolePanel(JPanel):
 
         sz = extender._current_font_size
 
-        
         top = JPanel(FlowLayout(FlowLayout.LEFT, 8, 4))
         top.setBackground(Color(38, 38, 42))
         top.setAlignmentX(Component.LEFT_ALIGNMENT)
@@ -705,7 +722,6 @@ class RolePanel(JPanel):
             "captured Key/Value to specific other roles." % (key, container or "(none)"))
 
     def _apply_item_to_all_roles(self):
-
         row = self.itemsTable.getSelectedRow()
         if row < 0:
             JOptionPane.showMessageDialog(self, "Select a Header/Parameter row first.")
@@ -718,7 +734,6 @@ class RolePanel(JPanel):
         self.ext.open_apply_to_roles_dialog(self, item_type, key, self.get_container_name())
 
     def _apply_endpoint_to_all_roles(self):
-
         endpoint = self.get_endpoint()
         confirm = JOptionPane.showConfirmDialog(
             self,
@@ -757,6 +772,8 @@ class RolePanel(JPanel):
         return self.endpointField.getText().strip()
 
     def get_entry(self):
+        if self.itemsTable.isEditing():
+            self.itemsTable.getCellEditor().stopCellEditing()
         items = []
         for r in range(self.itemsModel.getRowCount()):
             t = str(self.itemsModel.getValueAt(r, 0) or "Header").strip()
@@ -1218,9 +1235,10 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         self._batch_panels    = []
         self.role_panels      = []
         self._visible_columns = list(DEFAULT_VISIBLE_COLUMNS)
-        self._sort_mode        = None   
-        self._search_text      = u""    
-        self._search_scope     = "Both" 
+        self._sort_index      = 0
+        self._sort_mode       = None   
+        self._search_text     = u""    
+        self._search_scope    = "Both" 
         self._container_history = {}
         self._container_history_cap = 100
         self._results_lock = threading.Lock()
@@ -1250,6 +1268,10 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         callbacks.registerHttpListener(self)
         self.callbacks.printOutput("RoleSwitch GUI loaded.")
 
+    def _copy_to_clipboard(self, text):
+        selection = StringSelection(_u(text))
+        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(selection, None)
+
     def _enqueue_job(self, fn):
         self._job_queue.put(fn)
 
@@ -1273,6 +1295,8 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
         if messageIsRequest:
             return
+        if toolFlag != self.callbacks.TOOL_PROXY:
+            return
         try:
             request = messageInfo.getRequest()
             if not request:
@@ -1289,7 +1313,7 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
             if not container_name:
                 return
 
-            response = messageInfo.getResponse()  
+            response = messageInfo.getResponse()
 
             service = messageInfo.getHttpService()
             entry = {
@@ -1301,9 +1325,10 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
                 "time":     cairo_timestamp(),
             }
             key = _norm_container_name(container_name)
-            hist = self._container_history.setdefault(key, [])
-            hist.insert(0, entry)
-            del hist[self._container_history_cap:]
+            with self._results_lock:
+                hist = self._container_history.get(key, [])
+                new_hist = [entry] + hist[:self._container_history_cap - 1]
+                self._container_history[key] = new_hist
         except Exception as ex:
             print("[Container Capture Error] " + str(ex))
 
@@ -1405,6 +1430,7 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         btns.add(mkbtn("Load", Color(45, 110, 65),  self._on_load))
         btns.add(mkbtn("Export JSON...", Color(70, 130, 150), self._on_export))
         btns.add(mkbtn("Import JSON...", Color(70, 130, 150), self._on_import))
+        btns.add(mkbtn("Copy Roles (MD)", Color(110, 85, 145), self._on_copy_roles_md))
 
         lblFont = JLabel("  Font:")
         lblFont.setForeground(Color(190, 190, 190))
@@ -1443,6 +1469,40 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
 
         outer.add(btns, BorderLayout.SOUTH)
         self.tabs.addTab("Config", outer)
+
+    def _on_copy_roles_md(self):
+        lines = []
+        count = 0
+        for i, rp in enumerate(self.role_panels):
+            entry = rp.get_entry()
+            role_name = entry.get("role") or ("Unnamed Role %d" % (i + 1))
+            items = entry.get("items", [])
+            if not entry.get("role") and not items:
+                continue
+            count += 1
+            lines.append(u"### Role: `%s`" % _u(role_name))
+            if items:
+                lines.append(u"| Type | Key | Value |")
+                lines.append(u"| :--- | :--- | :--- |")
+                for it in items:
+                    t = _u(it.get("type", "Header")).replace(u"|", u"\\|")
+                    k = _u(it.get("key", "")).replace(u"|", u"\\|")
+                    v = _u(it.get("val", "")).replace(u"|", u"\\|")
+                    lines.append(u"| %s | `%s` | `%s` |" % (t, k, v))
+            else:
+                lines.append(u"_No headers or parameters configured._")
+            lines.append(u"")
+
+        if not lines:
+            JOptionPane.showMessageDialog(self.main_panel, "No roles/headers to copy.")
+            return
+
+        md_text = u"\n".join(lines).strip()
+        self._copy_to_clipboard(md_text)
+        JOptionPane.showMessageDialog(
+            self.main_panel,
+            "Copied %d role(s) with their headers/values in Markdown format to clipboard!" % count
+        )
 
     def _save_rps(self):
         try:
@@ -1485,6 +1545,7 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
                 self.roleCombo.setSelectedIndex(self.role_panels.index(rp))
         finally:
             self._combo_updating = False
+
     def _show_role_panel(self, idx):
         if not hasattr(self, "roleDisplay"):
             return
@@ -1520,8 +1581,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         self._rebuild_role_combo(select_panel=self.role_panels[next_idx])
 
     def _open_delete_role_dialog(self):
-        """'🗑 Delete Role...' — bulk delete without having to open each role
-        panel and click its own 'Delete Role' button."""
         if not self.role_panels:
             return
         names = [self._role_label(rp, i) for i, rp in enumerate(self.role_panels)]
@@ -1548,9 +1607,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         JOptionPane.showMessageDialog(self.main_panel, "Deleted %d role(s)." % len(to_delete))
 
     def _open_delete_item_dialog(self):
-        """'🗑 Delete Header/Param From ALL Roles...' — removes a specific
-        Header/Parameter row (matched by Type+Key, case-insensitive) from
-        every role that has it, in one shot."""
         owner = SwingUtilities.getWindowAncestor(self.main_panel)
         dlg = DeleteItemDialog(owner)
         dlg.setVisible(True)
@@ -1578,9 +1634,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
             (dlg.key, dlg.item_type, rows_removed, roles_touched))
 
     def _ensure_item_key_on_role(self, rp, item_type, key):
-        """Make sure role rp has a (item_type, key) row - case-insensitive
-        key match. Never touches an existing row's Value. If the row
-        doesn't exist yet it's added with a BLANK value."""
         key_l = key.strip().lower()
         for r in range(rp.itemsModel.getRowCount()):
             rt = str(rp.itemsModel.getValueAt(r, 0) or "Header").strip()
@@ -1591,11 +1644,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         rp._update_table_size()
 
     def open_apply_to_roles_dialog(self, source_rp, item_type, key, source_container):
-        """'⚡ Apply Item To ALL Roles' — checklist of every role; picks which
-        ones get this Type+Key added (Value is never copied). If the source
-        role's Container has a saved regex fingerprint for this Key, that
-        fingerprint is copied too, scoped to each target role's own
-        Container."""
         names = [self._role_label(rp, i) for i, rp in enumerate(self.role_panels)]
         exclude_idx = self.role_panels.index(source_rp) if source_rp in self.role_panels else None
         regex_info = self.get_grep_pattern(item_type, key, source_container)
@@ -1634,9 +1682,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         return count
 
     def _combined_text(self, headers, body_bytes):
-        """Flattens a parsed headers-list + body into one searchable block of
-        text, the same shape a person would get pasting raw traffic into the
-        Grab Value dialog - so a saved fingerprint regex matches either way."""
         try:
             body_str = self.helpers.bytesToString(body_bytes) if body_bytes else u""
         except:
@@ -1790,10 +1835,12 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         btnBar.add(lblSort)
         self.sortCombo = JComboBox(["Newest First", "ID \u2191", "ID \u2193", "Size \u2191", "Size \u2193", "Matches \u2713 Top"])
         self.sortCombo.setFont(Font("Monospaced", Font.PLAIN, sz))
+        if 0 <= self._sort_index < self.sortCombo.getItemCount():
+            self.sortCombo.setSelectedIndex(self._sort_index)
         def _onSortChange(e):
             idx = self.sortCombo.getSelectedIndex()
-            mapping = [None, ("id", "asc"), ("id", "desc"), ("size", "asc"), ("size", "desc"), ("match", "desc")]
-            self._sort_mode = mapping[idx] if 0 <= idx < len(mapping) else None
+            self._sort_index = idx
+            self._sort_mode = SORT_MAPPING[idx] if 0 <= idx < len(SORT_MAPPING) else None
             self._resort_all_batches()
         self.sortCombo.addActionListener(_onSortChange)
         btnBar.add(self.sortCombo)
@@ -1803,7 +1850,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         lblSearch.setFont(Font("Monospaced", Font.PLAIN, sz))
         btnBar.add(lblSearch)
 
-        
         self.comboSearchScope = JComboBox(["Both", "Request", "Response"])
         self.comboSearchScope.setFont(Font("Monospaced", Font.PLAIN, sz))
         self.comboSearchScope.setSelectedItem(self._search_scope)
@@ -1831,6 +1877,8 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         self.fldResultSearch.getDocument().addDocumentListener(ResultSearchListener())
         btnBar.add(self.fldResultSearch)
 
+        btnBar.add(mkbtn("Save View", Color(45, 140, 80), self._save_results_view))
+
         btnBar.add(self.lblStatus)
         topBar.add(btnBar, BorderLayout.WEST)
         self._results_outer.add(topBar, BorderLayout.NORTH)
@@ -1854,7 +1902,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
 
         self._results_outer.add(mainSplit, BorderLayout.CENTER)
         self.tabs.addTab("Results", self._results_outer)
-
     def get_visible_columns(self):
         return list(self._visible_columns)
 
@@ -1909,8 +1956,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         self._saveSettings()
 
     def _display_result(self, result):
-        """Called by whichever BatchPanel's table selection changed - loads
-        that row into the shared request/response editors."""
         self.current_display = result
         self.reqEditor.setMessage(result["request"], True)
         resp = result["response"]
@@ -1941,6 +1986,7 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
             return b
 
         searchBar.add(mkbtn("Resend Selected (All Roles)", Color(60, 100, 160), self._resendSelectedHistory))
+        searchBar.add(mkbtn("Copy (Method/Path/Host/Body)", Color(45, 130, 95), self._copySelectedHistoryClean))
         searchBar.add(mkbtn("Delete Selected", Color(140, 40, 40), self._deleteSelectedHistory))
         searchBar.add(mkbtn("Clear History", Color(100, 40, 40), self._clearHistory))
         outer.add(searchBar, BorderLayout.NORTH)
@@ -2002,6 +2048,72 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
 
         self.tabs.addTab("History", outer)
 
+    def _copySelectedHistoryClean(self):
+        rows = self.histTable.getSelectedRows()
+        entries_to_copy = []
+        if rows:
+            for r in rows:
+                mr = self.histTable.convertRowIndexToModel(r)
+                try:
+                    hid = int(str(self.histModel.getValueAt(mr, 0)))
+                    for e in self.history:
+                        if e["id"] == hid:
+                            entries_to_copy.append(e)
+                            break
+                except:
+                    pass
+        elif self.current_hist_entry:
+            entries_to_copy.append(self.current_hist_entry)
+
+        if not entries_to_copy:
+            JOptionPane.showMessageDialog(self.main_panel, "Select at least one history row to copy.")
+            return
+
+        blocks = []
+        for entry in entries_to_copy:
+            req = entry.get("request")
+            method = _u(entry.get("method", "GET"))
+            path   = _u(entry.get("path", "/"))
+            host   = _u(entry.get("host", ""))
+            body_str = u""
+
+            if req:
+                try:
+                    analyzed = self.helpers.analyzeRequest(req)
+                    headers  = list(analyzed.getHeaders())
+                    if headers:
+                        parts = headers[0].split(" ")
+                        if len(parts) >= 2:
+                            method = _u(parts[0])
+                            path   = _u(parts[1])
+                        for h in headers[1:]:
+                            if ":" in h:
+                                hname, hval = h.split(":", 1)
+                                if hname.strip().lower() == "host":
+                                    host = _u(hval.strip())
+                                    break
+                    body_bytes = req[analyzed.getBodyOffset():]
+                    if body_bytes:
+                        body_str = _u(self.helpers.bytesToString(body_bytes)).strip()
+                except Exception as ex:
+                    print("[History Copy Parse Error] " + str(ex))
+
+            lines = [
+                u"%s %s" % (method, path),
+                u"Host: %s" % host
+            ]
+            if body_str:
+                lines.append(u"")
+                lines.append(body_str)
+            blocks.append(u"\n".join(lines))
+
+        final_text = u"\n\n---\n\n".join(blocks)
+        self._copy_to_clipboard(final_text)
+        JOptionPane.showMessageDialog(
+            self.main_panel,
+            "Copied Method, Path, Host, and Body for %d request(s) to clipboard!" % len(blocks)
+        )
+
     def _onHistRowSelect(self, event):
         row = self.histTable.getSelectedRow()
         if row < 0:
@@ -2058,9 +2170,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         return panel
 
     def _deleteCurrentGroup(self):
-        """'Delete Current Group' — removes only the currently-open Group
-        tab and its results, unlike 'Clear All Groups' which wipes every
-        group."""
         idx = self._batch_tabs.getSelectedIndex()
         if idx < 0 or idx >= len(self._batch_panels):
             JOptionPane.showMessageDialog(self.main_panel, "No group is currently open.")
@@ -2078,9 +2187,8 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         self._batch_tabs.remove(idx)
         self._saveResults()
         self._setStatus("Group %d deleted" % batch_id, Color(150, 150, 150))
+
     def _config_to_role_entries(self, cfg):
-        """Backward compatible: supports new {'roles':[...]} and the old
-        fixed-row format ({'row_0': {...}, ...})."""
         if not cfg:
             return []
         if "roles" in cfg:
@@ -2330,11 +2438,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         return None
 
     def _extract_html_hidden_value(self, body_str, key):
-        """Finds <input name="KEY" ... value="VALUE" ...> (attributes in any
-        order, single or double quotes) - covers anti-CSRF tokens embedded as
-        hidden form fields, e.g. ASP.NET's __RequestVerificationToken:
-        <input name="__RequestVerificationToken" type="hidden" value="..."/>
-        """
         if not body_str:
             return None
         for m in re.finditer(r'<input\b([^>]*)>', body_str, re.IGNORECASE):
@@ -2347,9 +2450,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         return None
 
     def _extract_html_meta_value(self, body_str, key):
-        """Finds <meta name="KEY" content="VALUE"> (attributes in any order) -
-        a very common place frameworks stash a CSRF token, e.g.
-        <meta name="csrf-token" content="...">"""
         if not body_str:
             return None
         for m in re.finditer(r'<meta\b([^>]*)>', body_str, re.IGNORECASE):
@@ -2362,11 +2462,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         return None
 
     def _extract_body_value(self, body_bytes, content_type, key):
-        """Tries every known way a value shows up in a body, in order, and
-        returns the first hit. Deliberately does NOT gate any of these on the
-        declared Content-Type header - servers routinely mislabel bodies (a
-        JSON blob embedded inside an HTML page's <script> tag under a
-        text/html Content-Type is common), so every pattern is always tried."""
         body_str = ""
         if body_bytes:
             try:
@@ -2398,7 +2493,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         if meta_val is not None:
             return meta_val
 
-
         m = re.search(esc + r'\s*[:=]\s*["\']([^"\']*)["\']', body_str)
         if m:
             return m.group(1)
@@ -2411,8 +2505,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         return None
 
     def _extract_param_value(self, headers, body_bytes, key):
-        """Extract a param from a REQUEST: checks the URL query string first,
-        then the body (JSON, HTML, or form-encoded - see _extract_body_value)."""
         content_type = ""
         for h in headers:
             if ":" in h and h.split(":", 1)[0].strip().lower() == "content-type":
@@ -2433,9 +2525,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         return self._extract_body_value(body_bytes, content_type, key)
 
     def _extract_response_param_value(self, resp_headers, resp_body_bytes, key):
-        """Extract a param from a RESPONSE body (JSON, HTML, or form-encoded).
-        Used as a fallback for tokens (e.g. CSRF) that only ever come back in
-        the response and are never echoed in a later request's own body/URL."""
         content_type = ""
         for h in resp_headers:
             if ":" in h and h.split(":", 1)[0].strip().lower() == "content-type":
@@ -2444,10 +2533,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         return self._extract_body_value(resp_body_bytes, content_type, key)
 
     def _parse_endpoint(self, s):
-        """Parses the role's 'Endpoint' field. Accepts 'METHOD /path' (e.g.
-        'POST /graph') or just '/path' (matches any method). Returns
-        (method_or_None, path_or_None). Empty/blank -> (None, None), meaning
-        "no restriction - search all captured traffic for this container"."""
         s = (s or "").strip()
         if not s:
             return None, None
@@ -2458,10 +2543,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         return None, s
 
     def _request_matches_endpoint(self, headers, method, path):
-        """method/path as returned by _parse_endpoint; both None means match
-        anything. Path is compared exactly against the request's path (query
-        string ignored), never as a prefix/substring, so 'POST /graph' can't
-        accidentally match 'POST /graphql' or similar."""
         if method is None and path is None:
             return True
         if not headers:
@@ -2649,6 +2730,7 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         finally:
             pool.shutdown()
         self._saveResults()
+
     def _fire_role(self, messageInfo, role_entry, label, batch_panel):
         request  = messageInfo.getRequest()
         analyzed = self.helpers.analyzeRequest(messageInfo)
@@ -2723,7 +2805,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
             pass
 
     def send_all_roles_to_repeater(self, messageInfo):
-        """Fire all roles → new Group tab."""
         self._add_history(messageInfo)
 
         from java.util.concurrent import CountDownLatch
@@ -2739,7 +2820,6 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         self._fire_roles_concurrently(messageInfo, self._get_role_entries(), batch_panel)
 
     def send_roles_only_to_repeater(self, messageInfo):
-        """Roles + method variants → new Group tab."""
         self._add_history(messageInfo)
 
         from java.util.concurrent import CountDownLatch
@@ -2976,7 +3056,7 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
         self.lblStatus.setForeground(c)
 
     def _clearAllBatches(self):
-        self.results      = []
+        self.results       = []
         self._batch_panels = []
         self._next_id[0]    = 1
         self._next_batch[0] = 1
@@ -3099,6 +3179,38 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
             self._batch_panels.append(panel)
             self._batch_tabs.addTab("Group %d" % bid, panel)
 
+    def get_column_widths(self):
+        return getattr(self, "_column_widths", {})
+
+    def _save_results_view(self):
+        self._search_text = self.fldResultSearch.getText()
+        self._search_scope = str(self.comboSearchScope.getSelectedItem())
+        idx = self.sortCombo.getSelectedIndex()
+        mapping = [None, ("id", "asc"), ("id", "desc"), ("size", "asc"), ("size", "desc"), ("match", "desc")]
+        self._sort_index = idx
+        self._sort_mode = mapping[idx] if 0 <= idx < len(mapping) else None
+
+        if not hasattr(self, "_column_widths"):
+            self._column_widths = {}
+
+        tab_idx = self._batch_tabs.getSelectedIndex()
+        active_bp = self._batch_panels[tab_idx] if 0 <= tab_idx < len(self._batch_panels) else (self._batch_panels[0] if self._batch_panels else None)
+        if active_bp:
+            cm = active_bp.resTable.getColumnModel()
+            for i in range(cm.getColumnCount()):
+                tc = cm.getColumn(i)
+                col_name = str(tc.getHeaderValue())
+                w = tc.getWidth()
+                if w > 0:
+                    self._column_widths[col_name] = int(w)
+
+        for bp in self._batch_panels:
+            bp._apply_visible_columns(self._visible_columns)
+            bp.refresh_table()
+
+        self._saveSettings()
+        self._setStatus("View & Column widths saved!", Color(120, 220, 140))
+
     def _saveSettings(self):
         try:
             s = {
@@ -3106,6 +3218,10 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
                 "rps":             self.fldRPS.getText(),
                 "threads":         self.spnThreads.getValue(),
                 "visible_columns": self._visible_columns,
+                "column_widths":   getattr(self, "_column_widths", {}),
+                "sort_index":      self.sortCombo.getSelectedIndex() if hasattr(self, "sortCombo") else getattr(self, "_sort_index", 0),
+                "search_text":     self.fldResultSearch.getText() if hasattr(self, "fldResultSearch") else self._search_text,
+                "search_scope":    str(self.comboSearchScope.getSelectedItem()) if hasattr(self, "comboSearchScope") else self._search_scope,
             }
             with open(SETTINGS_FILE, "w") as f:
                 json.dump(s, f, indent=2)
@@ -3113,6 +3229,7 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
             print("[Settings Save Error] " + str(e))
 
     def _loadSettings(self):
+        self._column_widths = {}
         try:
             if not os.path.exists(SETTINGS_FILE): return
             with open(SETTINGS_FILE, "r") as f:
@@ -3121,5 +3238,17 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory, IMessageEditorContr
             saved_cols = self._saved_settings.get("visible_columns")
             if isinstance(saved_cols, list) and saved_cols:
                 self._visible_columns = [c for c in saved_cols if c in ALL_RESULT_COLUMNS] or list(DEFAULT_VISIBLE_COLUMNS)
+            saved_widths = self._saved_settings.get("column_widths")
+            if isinstance(saved_widths, dict):
+                self._column_widths = saved_widths
+            self._search_text = _u(self._saved_settings.get("search_text", u""))
+            saved_scope = self._saved_settings.get("search_scope", "Both")
+            if saved_scope in ("Both", "Request", "Response"):
+                self._search_scope = saved_scope
+            mapping = [None, ("id", "asc"), ("id", "desc"), ("size", "asc"), ("size", "desc"), ("match", "desc")]
+            idx = int(self._saved_settings.get("sort_index", 0))
+            if 0 <= idx < len(mapping):
+                self._sort_index = idx
+                self._sort_mode = mapping[idx]
         except Exception as e:
             print("[Settings Load Error] " + str(e))
